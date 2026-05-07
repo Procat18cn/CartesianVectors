@@ -403,6 +403,7 @@ function getSelectedVector() {
 }
 
 function deleteVector(id: number) {
+  if (vectors.length <= 1) return;
   const vector = vectors.find((v) => v.id === id);
   if (!vector) return;
   if (!confirm(`确定删除「${getVectorDisplayName(vector)}」？`)) return;

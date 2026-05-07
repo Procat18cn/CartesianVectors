@@ -246,6 +246,22 @@ function removeCss2DLabels(root: THREE.Object3D) {
   });
 }
 
+function disposeObjectTree(root: THREE.Object3D) {
+  root.traverse((object) => {
+    const renderable = object as THREE.Object3D & {
+      geometry?: THREE.BufferGeometry;
+      material?: THREE.Material | THREE.Material[];
+    };
+
+    renderable.geometry?.dispose();
+    if (Array.isArray(renderable.material)) {
+      renderable.material.forEach((material) => material.dispose());
+    } else {
+      renderable.material?.dispose();
+    }
+  });
+}
+
 export function buildAxes() {
   axesGroup.clear();
   axesGroup.add(createDashedAxis(new THREE.Vector3(-6, 0, 0), new THREE.Vector3(6, 0, 0), "#d94841"));
@@ -268,6 +284,7 @@ export function buildAxes() {
 
 export function renderVectors() {
   removeCss2DLabels(vectorRoot);
+  disposeObjectTree(vectorRoot);
   vectorRoot.clear();
   vectorRenders.clear();
 
