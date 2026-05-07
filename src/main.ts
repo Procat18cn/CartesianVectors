@@ -1,58 +1,32 @@
 import "./styles.css";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { CSS2DRenderer } from "three/examples/jsm/renderers/CSS2DRenderer.js";
+import type { VectorModel } from "./types.js";
 import {
-  CSS2DObject,
-  CSS2DRenderer,
-} from "three/examples/jsm/renderers/CSS2DRenderer.js";
+  readNumber,
+  formatNumber,
+  formatInput,
+  getDirectionControls,
+  getVectorDisplayName,
+  randomVectorColor,
+} from "./math.js";
+import {
+  CAMERA_TARGET,
+  scene,
+  camera,
+  renderState,
+  viewport,
+  axesGroup,
+  grid,
+  vectorRoot,
+  vectors,
+  app,
+  inputs,
+} from "./state.js";
+import { buildAxes, renderVectors } from "./render3d.js";
+import { renderFallbackPreview } from "./render2d.js";
 
-type VectorModel = {
-  id: number;
-  name: string;
-  x: number;
-  y: number;
-  z: number;
-  color: string;
-  thickness: number;
-  visible: boolean;
-  showComponents: boolean;
-  showProjectionBox: boolean;
-  showAngles: boolean;
-  showNameLabel: boolean;
-  showComponentLabels: boolean;
-  showMagnitudeLabel: boolean;
-};
-
-type VectorRender = {
-  group: THREE.Group;
-  labels: CSS2DObject[];
-};
-
-const AXIS_COLORS = {
-  x: 0xd94841,
-  y: 0x26935d,
-  z: 0x2f6fca,
-};
-const CAMERA_TARGET = new THREE.Vector3(0, 0.72, 0);
-
-const viewport = mustGetElement<HTMLElement>("viewport");
-const scene = new THREE.Scene();
-scene.background = new THREE.Color("#f7fafc");
-
-const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 1000);
-camera.position.set(8, 7, 8);
-
-let renderer: THREE.WebGLRenderer | null = null;
-let labelRenderer: CSS2DRenderer | null = null;
-let controls: OrbitControls | null = null;
-let fallbackCanvas: HTMLCanvasElement | null = null;
-let fallbackContext: CanvasRenderingContext2D | null = null;
-
-initViewportRenderer();
-
-const axesGroup = new THREE.Group();
-const grid = new THREE.GridHelper(12, 12, 0x8a94a7, 0xd9dee8);
-grid.position.y = 0;
 scene.add(grid);
 scene.add(axesGroup);
 
@@ -61,87 +35,18 @@ const directionalLight = new THREE.DirectionalLight(0xffffff, 1.15);
 directionalLight.position.set(8, 10, 6);
 scene.add(directionalLight);
 
-const vectorRoot = new THREE.Group();
 scene.add(vectorRoot);
 
-const vectors: VectorModel[] = [
-  {
-    id: 1,
-    name: "向量 A",
-    x: 3,
-    y: 2,
-    z: 4,
-    color: "#6f4bd8",
-    thickness: 0.08,
-    visible: true,
-    showComponents: true,
-    showProjectionBox: true,
-    showAngles: true,
-    showNameLabel: true,
-    showComponentLabels: true,
-    showMagnitudeLabel: true,
-  },
-];
-
-let selectedId = vectors[0].id;
-let nextVectorId = 2;
-let editMode: "components" | "direction" = "components";
-const vectorRenders = new Map<number, VectorRender>();
-
-const inputs = {
-  app: mustGetElement<HTMLDivElement>("app"),
-  panelToggle: mustGetElement<HTMLButtonElement>("panelToggle"),
-  addVector: mustGetElement<HTMLButtonElement>("addVector"),
-  backgroundColor: mustGetElement<HTMLInputElement>("backgroundColor"),
-  showGrid: mustGetElement<HTMLInputElement>("showGrid"),
-  showAxes: mustGetElement<HTMLInputElement>("showAxes"),
-  vectorList: mustGetElement<HTMLDivElement>("vectorList"),
-  vectorName: mustGetElement<HTMLInputElement>("vectorName"),
-  vectorColor: mustGetElement<HTMLInputElement>("vectorColor"),
-  vectorX: mustGetElement<HTMLInputElement>("vectorX"),
-  vectorY: mustGetElement<HTMLInputElement>("vectorY"),
-  vectorZ: mustGetElement<HTMLInputElement>("vectorZ"),
-  vectorMagnitude: mustGetElement<HTMLInputElement>("vectorMagnitude"),
-  vectorYaw: mustGetElement<HTMLInputElement>("vectorYaw"),
-  vectorPitch: mustGetElement<HTMLInputElement>("vectorPitch"),
-  vectorThickness: mustGetElement<HTMLInputElement>("vectorThickness"),
-  vectorVisible: mustGetElement<HTMLInputElement>("vectorVisible"),
-  showComponents: mustGetElement<HTMLInputElement>("showComponents"),
-  showProjectionBox: mustGetElement<HTMLInputElement>("showProjectionBox"),
-  showAngles: mustGetElement<HTMLInputElement>("showAngles"),
-  showNameLabel: mustGetElement<HTMLInputElement>("showNameLabel"),
-  showComponentLabels: mustGetElement<HTMLInputElement>("showComponentLabels"),
-  showMagnitudeLabel: mustGetElement<HTMLInputElement>("showMagnitudeLabel"),
-  vectorDetails: mustGetElement<HTMLElement>("vectorDetails"),
-  viewHelp: mustGetElement<HTMLButtonElement>("viewHelp"),
-  viewHelpPopover: mustGetElement<HTMLDivElement>("viewHelpPopover"),
-  componentMode: mustGetElement<HTMLButtonElement>("componentMode"),
-  directionMode: mustGetElement<HTMLButtonElement>("directionMode"),
-  componentFields: mustGetElement<HTMLDivElement>("componentFields"),
-  directionFields: mustGetElement<HTMLDivElement>("directionFields"),
-  directionTip: mustGetElement<HTMLParagraphElement>("directionTip"),
-  resetView: mustGetElement<HTMLButtonElement>("resetView"),
-  zoomIn: mustGetElement<HTMLButtonElement>("zoomIn"),
-  zoomOut: mustGetElement<HTMLButtonElement>("zoomOut"),
-};
-
+initViewportRenderer();
 buildAxes();
 bindEvents();
 syncAll();
 resize();
 animate();
 
-function mustGetElement<T extends HTMLElement>(id: string): T {
-  const element = document.getElementById(id);
-  if (!element) {
-    throw new Error(`Missing element: ${id}`);
-  }
-  return element as T;
-}
-
 function bindEvents() {
   inputs.addVector.addEventListener("click", () => {
-    const id = nextVectorId++;
+    const id = app.nextVectorId++;
     vectors.push({
       id,
       name: `向量 ${String.fromCharCode(64 + Math.min(id, 26))}`,
@@ -158,7 +63,7 @@ function bindEvents() {
       showComponentLabels: true,
       showMagnitudeLabel: true,
     });
-    selectedId = id;
+    app.selectedId = id;
     syncAll();
   });
 
@@ -247,10 +152,34 @@ function bindEvents() {
     const isCollapsed = inputs.app.classList.toggle("panel-collapsed");
     inputs.panelToggle.setAttribute("aria-expanded", String(!isCollapsed));
     inputs.panelToggle.setAttribute("aria-label", isCollapsed ? "展开控制栏" : "收缩控制栏");
-    window.setTimeout(resize, 190);
+  });
+  inputs.app.addEventListener("transitionend", (e) => {
+    if (e.propertyName === "grid-template-columns") resize();
   });
 
   window.addEventListener("resize", resize);
+  window.addEventListener("keydown", (e) => {
+    const target = e.target as HTMLElement;
+    if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") return;
+
+    if (e.key === "Delete" || e.key === "Backspace") {
+      e.preventDefault();
+      deleteVector(app.selectedId);
+    } else if (e.key === "Tab") {
+      e.preventDefault();
+      const idx = vectors.findIndex((v) => v.id === app.selectedId);
+      app.selectedId = vectors[(idx + 1) % vectors.length].id;
+      syncAll();
+    } else if (e.key === "1") {
+      setView("iso");
+    } else if (e.key === "2") {
+      setView("xy");
+    } else if (e.key === "3") {
+      setView("xz");
+    } else if (e.key === "4") {
+      setView("yz");
+    }
+  });
 }
 
 function updateSelectedDirection() {
@@ -268,7 +197,7 @@ function updateSelectedDirection() {
 }
 
 function setEditMode(mode: "components" | "direction") {
-  editMode = mode;
+  app.editMode = mode;
   syncControls();
 }
 
@@ -282,22 +211,22 @@ function syncAll() {
 
 function initViewportRenderer() {
   try {
-    renderer = new THREE.WebGLRenderer({
+    renderState.renderer = new THREE.WebGLRenderer({
       antialias: true,
       powerPreference: "high-performance",
     });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    viewport.appendChild(renderer.domElement);
+    renderState.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    viewport.appendChild(renderState.renderer.domElement);
 
-    labelRenderer = new CSS2DRenderer();
-    labelRenderer.domElement.style.position = "absolute";
-    labelRenderer.domElement.style.inset = "0";
-    labelRenderer.domElement.style.pointerEvents = "none";
-    viewport.appendChild(labelRenderer.domElement);
+    renderState.labelRenderer = new CSS2DRenderer();
+    renderState.labelRenderer.domElement.style.position = "absolute";
+    renderState.labelRenderer.domElement.style.inset = "0";
+    renderState.labelRenderer.domElement.style.pointerEvents = "none";
+    viewport.appendChild(renderState.labelRenderer.domElement);
 
-    controls = new OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true;
-    controls.target.copy(CAMERA_TARGET);
+    renderState.controls = new OrbitControls(camera, renderState.renderer.domElement);
+    renderState.controls.enableDamping = true;
+    renderState.controls.target.copy(CAMERA_TARGET);
   } catch (error) {
     console.error("WebGL 初始化失败，已切换到 2D 预览模式。", error);
     const fallback = document.createElement("div");
@@ -305,8 +234,8 @@ function initViewportRenderer() {
 
     const canvas = document.createElement("canvas");
     canvas.className = "fallback-canvas";
-    fallbackCanvas = canvas;
-    fallbackContext = canvas.getContext("2d");
+    renderState.fallbackCanvas = canvas;
+    renderState.fallbackContext = canvas.getContext("2d");
 
     const note = document.createElement("div");
     note.className = "fallback-note";
@@ -337,11 +266,11 @@ function syncControls() {
   inputs.showNameLabel.checked = vector.showNameLabel;
   inputs.showComponentLabels.checked = vector.showComponentLabels;
   inputs.showMagnitudeLabel.checked = vector.showMagnitudeLabel;
-  inputs.componentMode.classList.toggle("mode-tab--active", editMode === "components");
-  inputs.directionMode.classList.toggle("mode-tab--active", editMode === "direction");
-  inputs.componentFields.classList.toggle("is-hidden", editMode !== "components");
-  inputs.directionFields.classList.toggle("is-hidden", editMode !== "direction");
-  inputs.directionTip.classList.toggle("is-hidden", editMode !== "direction");
+  inputs.componentMode.classList.toggle("mode-tab--active", app.editMode === "components");
+  inputs.directionMode.classList.toggle("mode-tab--active", app.editMode === "direction");
+  inputs.componentFields.classList.toggle("is-hidden", app.editMode !== "components");
+  inputs.directionFields.classList.toggle("is-hidden", app.editMode !== "direction");
+  inputs.directionTip.classList.toggle("is-hidden", app.editMode !== "direction");
 }
 
 function renderVectorList() {
@@ -349,7 +278,7 @@ function renderVectorList() {
 
   for (const vector of vectors) {
     const item = document.createElement("div");
-    item.className = `vector-item${vector.id === selectedId ? " vector-item--active" : ""}`;
+    item.className = `vector-item${vector.id === app.selectedId ? " vector-item--active" : ""}`;
 
     const swatch = document.createElement("span");
     swatch.className = "vector-swatch";
@@ -362,7 +291,7 @@ function renderVectorList() {
       vector.y,
     )}, ${formatNumber(vector.z)})`;
     select.addEventListener("click", () => {
-      selectedId = vector.id;
+      app.selectedId = vector.id;
       syncAll();
     });
 
@@ -371,318 +300,11 @@ function renderVectorList() {
     remove.type = "button";
     remove.textContent = "删除";
     remove.disabled = vectors.length === 1;
-    remove.addEventListener("click", () => {
-      const index = vectors.findIndex((entry) => entry.id === vector.id);
-      if (index >= 0) {
-        vectors.splice(index, 1);
-      }
-      if (selectedId === vector.id) {
-        selectedId = vectors[0].id;
-      }
-      syncAll();
-    });
+    remove.addEventListener("click", () => deleteVector(vector.id));
 
     item.append(swatch, select, remove);
     inputs.vectorList.appendChild(item);
   }
-}
-
-function renderVectors() {
-  removeCss2DLabels(vectorRoot);
-  vectorRoot.clear();
-  vectorRenders.clear();
-
-  for (const vector of vectors) {
-    const group = new THREE.Group();
-    const labels: CSS2DObject[] = [];
-    group.visible = vector.visible;
-
-    const end = new THREE.Vector3(vector.x, vector.y, vector.z);
-    const length = end.length();
-    if (length > 0.0001) {
-      group.add(createArrow(new THREE.Vector3(0, 0, 0), end, vector.color, vector.thickness));
-      if (vector.showNameLabel) {
-        const label = createLabel(getVectorDisplayName(vector), "label");
-        label.position.copy(end.clone().multiplyScalar(1.04));
-        labels.push(label);
-        group.add(label);
-      }
-      if (vector.showMagnitudeLabel) {
-        const label = createLabel(`|v|=${formatNumber(length)}`, "label");
-        label.position.copy(end.clone().multiplyScalar(0.52).add(new THREE.Vector3(0, 0.28, 0)));
-        labels.push(label);
-        group.add(label);
-      }
-    }
-
-    if (vector.showComponents && length > 0.0001) {
-      addComponentArrows(group, vector);
-    }
-
-    if (vector.showProjectionBox && length > 0.0001) {
-      addProjectionBox(group, vector);
-    }
-
-    if (vector.showAngles && length > 0.0001) {
-      addAngleGuides(group, labels, vector, end, length);
-    }
-
-    vectorRoot.add(group);
-    vectorRenders.set(vector.id, { group, labels });
-  }
-}
-
-function removeCss2DLabels(root: THREE.Object3D) {
-  root.traverse((object) => {
-    if (object instanceof CSS2DObject) {
-      object.element.remove();
-    }
-  });
-}
-
-function buildAxes() {
-  axesGroup.clear();
-  axesGroup.add(createDashedAxis(new THREE.Vector3(-6, 0, 0), new THREE.Vector3(6, 0, 0), "#d94841"));
-  axesGroup.add(createDashedAxis(new THREE.Vector3(0, -6, 0), new THREE.Vector3(0, 6, 0), "#26935d"));
-  axesGroup.add(createDashedAxis(new THREE.Vector3(0, 0, -6), new THREE.Vector3(0, 0, 6), "#2f6fca"));
-
-  const labels: Array<[string, THREE.Vector3, string]> = [
-    ["X", new THREE.Vector3(6.35, 0, 0), "#d94841"],
-    ["Y", new THREE.Vector3(0, 6.35, 0), "#26935d"],
-    ["Z", new THREE.Vector3(0, 0, 6.35), "#2f6fca"],
-  ];
-
-  for (const [text, position, color] of labels) {
-    const label = createLabel(text, "label label--axis");
-    label.element.style.color = color;
-    label.position.copy(position);
-    axesGroup.add(label);
-  }
-}
-
-function addComponentArrows(group: THREE.Group, vector: VectorModel) {
-  const origin = new THREE.Vector3(0, 0, 0);
-  const componentColor = vector.color;
-  const components: Array<[THREE.Vector3, string, string]> = [
-    [new THREE.Vector3(vector.x, 0, 0), "x", "x"],
-    [new THREE.Vector3(0, vector.y, 0), "y", "y"],
-    [new THREE.Vector3(0, 0, vector.z), "z", "z"],
-  ];
-
-  for (const [end, key, labelText] of components) {
-    if (end.length() <= 0.0001) continue;
-    group.add(createArrow(origin, end, componentColor, 0.065, 0.38));
-    if (vector.showComponentLabels) {
-      const label = createLabel(`${labelText}=${formatNumber(end.getComponent(keyToIndex(key)))}`, "label");
-      label.position.copy(end.clone().multiplyScalar(1.08));
-      group.add(label);
-    }
-  }
-}
-
-function addProjectionBox(group: THREE.Group, vector: VectorModel) {
-  const points = [
-    new THREE.Vector3(vector.x, 0, 0),
-    new THREE.Vector3(vector.x, vector.y, 0),
-    new THREE.Vector3(0, vector.y, 0),
-    new THREE.Vector3(vector.x, 0, vector.z),
-    new THREE.Vector3(0, vector.y, vector.z),
-    new THREE.Vector3(vector.x, vector.y, vector.z),
-    new THREE.Vector3(0, 0, vector.z),
-  ];
-
-  const segments: Array<[THREE.Vector3, THREE.Vector3]> = [
-    [points[0], points[1]],
-    [points[2], points[1]],
-    [points[0], points[3]],
-    [points[6], points[3]],
-    [points[2], points[4]],
-    [points[6], points[4]],
-    [points[3], points[5]],
-    [points[4], points[5]],
-    [points[1], points[5]],
-  ];
-
-  const material = new THREE.LineDashedMaterial({
-    color: 0x5a6478,
-    dashSize: 0.16,
-    gapSize: 0.1,
-    transparent: true,
-    opacity: 0.58,
-  });
-
-  for (const [start, end] of segments) {
-    if (start.distanceTo(end) <= 0.0001) continue;
-    const geometry = new THREE.BufferGeometry().setFromPoints([start, end]);
-    const line = new THREE.Line(geometry, material);
-    line.computeLineDistances();
-    group.add(line);
-  }
-}
-
-function addAngleGuides(
-  group: THREE.Group,
-  labels: CSS2DObject[],
-  vector: VectorModel,
-  end: THREE.Vector3,
-  length: number,
-) {
-  const axes: Array<{
-    name: string;
-    axis: THREE.Vector3;
-    color: number;
-    cosine: number;
-  }> = [
-    { name: "α", axis: new THREE.Vector3(1, 0, 0), color: AXIS_COLORS.x, cosine: vector.x / length },
-    { name: "β", axis: new THREE.Vector3(0, 1, 0), color: AXIS_COLORS.y, cosine: vector.y / length },
-    { name: "γ", axis: new THREE.Vector3(0, 0, 1), color: AXIS_COLORS.z, cosine: vector.z / length },
-  ];
-
-  for (const axis of axes) {
-    const angle = Math.acos(THREE.MathUtils.clamp(axis.cosine, -1, 1));
-    const arc = createAngleArc(axis.axis, end.clone().normalize(), angle, axis.color);
-    group.add(arc);
-
-    const label = createLabel(`${axis.name}=${formatNumber(THREE.MathUtils.radToDeg(angle))}°`, "label");
-    const mid = axis.axis.clone().lerp(end.clone().normalize(), 0.5).normalize().multiplyScalar(1.15);
-    label.position.copy(mid);
-    labels.push(label);
-    group.add(label);
-  }
-}
-
-function createAngleArc(
-  from: THREE.Vector3,
-  to: THREE.Vector3,
-  angle: number,
-  color: number,
-) {
-  const points: THREE.Vector3[] = [];
-  const radius = 0.88;
-  const steps = 28;
-  const start = from.clone().normalize();
-  const end = to.clone().normalize();
-  let rotationAxis = start.clone().cross(end).normalize();
-
-  if (rotationAxis.length() <= 0.0001) {
-    rotationAxis = new THREE.Vector3(0, 1, 0).cross(start).normalize();
-    if (rotationAxis.length() <= 0.0001) {
-      rotationAxis = new THREE.Vector3(1, 0, 0).cross(start).normalize();
-    }
-  }
-
-  for (let i = 0; i <= steps; i += 1) {
-    const t = angle <= 0.0001 ? 0 : i / steps;
-    points.push(
-      start
-        .clone()
-        .applyAxisAngle(rotationAxis, angle * t)
-        .normalize()
-        .multiplyScalar(radius),
-    );
-  }
-
-  const geometry = new THREE.BufferGeometry().setFromPoints(points);
-  const material = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.9 });
-  return new THREE.Line(geometry, material);
-}
-
-function createArrow(
-  start: THREE.Vector3,
-  end: THREE.Vector3,
-  color: string,
-  thickness: number,
-  opacity = 1,
-) {
-  const direction = end.clone().sub(start);
-  const length = direction.length();
-  const group = new THREE.Group();
-  if (length <= 0.0001) return group;
-
-  const normalized = direction.clone().normalize();
-  const headLength = Math.min(Math.max(length * 0.18, 0.2), 0.48);
-  const shaftLength = Math.max(length - headLength, 0.01);
-  const material = new THREE.MeshStandardMaterial({
-    color,
-    roughness: 0.48,
-    metalness: 0.02,
-    transparent: opacity < 1,
-    opacity,
-  });
-
-  const shaftGeometry = new THREE.CylinderGeometry(thickness, thickness, shaftLength, 24);
-  const shaft = new THREE.Mesh(shaftGeometry, material);
-  shaft.position.copy(start.clone().add(normalized.clone().multiplyScalar(shaftLength / 2)));
-  shaft.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), normalized);
-
-  const tail = new THREE.Mesh(new THREE.SphereGeometry(thickness, 20, 12), material);
-  tail.position.copy(start);
-
-  const headGeometry = new THREE.ConeGeometry(thickness * 2.7, headLength, 28);
-  const head = new THREE.Mesh(headGeometry, material);
-  head.position.copy(start.clone().add(normalized.clone().multiplyScalar(shaftLength + headLength / 2)));
-  head.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), normalized);
-
-  group.add(tail, shaft, head);
-  return group;
-}
-
-function createDashedAxis(start: THREE.Vector3, end: THREE.Vector3, color: string) {
-  const group = new THREE.Group();
-  const direction = end.clone().sub(start).normalize();
-  const axisLength = start.distanceTo(end);
-  const headLength = 0.42;
-  const dashLength = 0.34;
-  const gapLength = 0.2;
-  const radius = 0.038;
-  const drawableLength = Math.max(0, axisLength - headLength * 0.92);
-  const lineEnd = end.clone().sub(direction.clone().multiplyScalar(headLength * 0.92));
-  const material = new THREE.MeshStandardMaterial({
-    color,
-    roughness: 0.5,
-    transparent: true,
-    opacity: 0.82,
-  });
-
-  let cursor = 0;
-  while (cursor < drawableLength) {
-    const segmentLength = Math.min(dashLength, drawableLength - cursor);
-    const segmentStart = start.clone().add(direction.clone().multiplyScalar(cursor));
-    const segmentEnd = start.clone().add(direction.clone().multiplyScalar(cursor + segmentLength));
-    group.add(createCapsuleSegment(segmentStart, segmentEnd, radius, material));
-    cursor += dashLength + gapLength;
-  }
-
-  const head = new THREE.Mesh(
-    new THREE.ConeGeometry(0.16, headLength, 24),
-    new THREE.MeshStandardMaterial({ color, roughness: 0.48 }),
-  );
-  head.position.copy(lineEnd.clone().add(direction.clone().multiplyScalar(headLength / 2)));
-  head.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction);
-  group.add(head);
-  return group;
-}
-
-function createCapsuleSegment(
-  start: THREE.Vector3,
-  end: THREE.Vector3,
-  radius: number,
-  material: THREE.Material,
-) {
-  const direction = end.clone().sub(start);
-  const length = direction.length();
-  const geometry = new THREE.CapsuleGeometry(radius, Math.max(0.001, length - radius * 2), 4, 12);
-  const mesh = new THREE.Mesh(geometry, material);
-  mesh.position.copy(start.clone().add(end).multiplyScalar(0.5));
-  mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction.normalize());
-  return mesh;
-}
-
-function createLabel(text: string, className: string) {
-  const element = document.createElement("div");
-  element.className = className;
-  element.textContent = text;
-  return new CSS2DObject(element);
 }
 
 function renderDetails() {
@@ -735,254 +357,57 @@ function setView(view: string) {
     yz: new THREE.Vector3(distance, 0, 0),
   };
   camera.position.copy(positions[view] ?? positions.iso);
-  controls?.target.copy(CAMERA_TARGET);
-  controls?.update();
+  renderState.controls?.target.copy(CAMERA_TARGET);
+  renderState.controls?.update();
   renderFallbackPreview();
 }
 
 function zoomCamera(multiplier: number) {
-  if (!controls) return;
-  const offset = camera.position.clone().sub(controls.target);
-  camera.position.copy(controls.target.clone().add(offset.multiplyScalar(multiplier)));
-  controls.update();
+  if (!renderState.controls) return;
+  const offset = camera.position.clone().sub(renderState.controls.target);
+  camera.position.copy(renderState.controls.target.clone().add(offset.multiplyScalar(multiplier)));
+  renderState.controls.update();
 }
 
 function resize() {
   const { clientWidth, clientHeight } = viewport;
   camera.aspect = clientWidth / Math.max(clientHeight, 1);
   camera.updateProjectionMatrix();
-  renderer?.setSize(clientWidth, clientHeight);
-  labelRenderer?.setSize(clientWidth, clientHeight);
-  if (fallbackCanvas) {
+  renderState.renderer?.setSize(clientWidth, clientHeight);
+  renderState.labelRenderer?.setSize(clientWidth, clientHeight);
+  if (renderState.fallbackCanvas) {
     const pixelRatio = Math.min(window.devicePixelRatio, 2);
-    fallbackCanvas.width = Math.max(1, Math.floor(clientWidth * pixelRatio));
-    fallbackCanvas.height = Math.max(1, Math.floor(clientHeight * pixelRatio));
-    fallbackCanvas.style.width = `${clientWidth}px`;
-    fallbackCanvas.style.height = `${clientHeight}px`;
-    fallbackContext?.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+    renderState.fallbackCanvas.width = Math.max(1, Math.floor(clientWidth * pixelRatio));
+    renderState.fallbackCanvas.height = Math.max(1, Math.floor(clientHeight * pixelRatio));
+    renderState.fallbackCanvas.style.width = `${clientWidth}px`;
+    renderState.fallbackCanvas.style.height = `${clientHeight}px`;
+    renderState.fallbackContext?.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
     renderFallbackPreview();
   }
 }
 
 function animate() {
   requestAnimationFrame(animate);
-  if (!renderer || !labelRenderer) return;
-  controls?.update();
-  renderer.render(scene, camera);
-  labelRenderer.render(scene, camera);
-}
-
-function renderFallbackPreview() {
-  if (!fallbackCanvas || !fallbackContext) return;
-
-  const width = fallbackCanvas.clientWidth;
-  const height = fallbackCanvas.clientHeight;
-  const ctx = fallbackContext;
-  ctx.clearRect(0, 0, width, height);
-  ctx.fillStyle = inputs?.backgroundColor?.value ?? "#f7fafc";
-  ctx.fillRect(0, 0, width, height);
-
-  const visibleVectors = vectors.filter((vector) => vector.visible);
-  const maxComponent = Math.max(
-    6,
-    ...visibleVectors.flatMap((vector) => [
-      Math.abs(vector.x),
-      Math.abs(vector.y),
-      Math.abs(vector.z),
-    ]),
-  );
-  const scale = Math.min(width, height) / (maxComponent * 3.2);
-  const origin = { x: width * 0.5, y: height * 0.58 };
-
-  const project = (x: number, y: number, z: number) => ({
-    x: origin.x + (x - z) * scale,
-    y: origin.y + ((x + z) * 0.42 - y) * scale,
-  });
-
-  if (inputs.showGrid.checked) {
-    ctx.strokeStyle = "rgba(105, 118, 145, 0.18)";
-    ctx.lineWidth = 1;
-    for (let i = -6; i <= 6; i += 1) {
-      drawLine2d(ctx, project(-6, 0, i), project(6, 0, i));
-      drawLine2d(ctx, project(i, 0, -6), project(i, 0, 6));
-    }
-  }
-
-  if (inputs.showAxes.checked) {
-    ctx.setLineDash([8, 6]);
-    drawArrow2d(ctx, project(-6, 0, 0), project(6, 0, 0), "#d94841", 3);
-    drawArrow2d(ctx, project(0, -6, 0), project(0, 6, 0), "#26935d", 3);
-    drawArrow2d(ctx, project(0, 0, -6), project(0, 0, 6), "#2f6fca", 3);
-    ctx.setLineDash([]);
-    drawText2d(ctx, "X", project(6.4, 0, 0), "#d94841");
-    drawText2d(ctx, "Y", project(0, 6.4, 0), "#26935d");
-    drawText2d(ctx, "Z", project(0, 0, 6.4), "#2f6fca");
-  }
-
-  for (const vector of visibleVectors) {
-    const end = project(vector.x, vector.y, vector.z);
-    const origin2d = project(0, 0, 0);
-
-    if (vector.showProjectionBox) {
-      ctx.setLineDash([6, 5]);
-      ctx.strokeStyle = "rgba(74, 85, 105, 0.55)";
-      ctx.lineWidth = 1.2;
-      const helperPoints = [
-        [project(vector.x, 0, 0), project(vector.x, vector.y, 0)],
-        [project(0, vector.y, 0), project(vector.x, vector.y, 0)],
-        [project(vector.x, vector.y, 0), end],
-        [project(vector.x, 0, vector.z), end],
-        [project(0, vector.y, vector.z), end],
-      ];
-      for (const [start, finish] of helperPoints) {
-        drawLine2d(ctx, start, finish);
-      }
-      ctx.setLineDash([]);
-    }
-
-    if (vector.showComponents) {
-      const componentColor = hexToRgba(vector.color, 0.42);
-      const xEnd = project(vector.x, 0, 0);
-      const yEnd = project(0, vector.y, 0);
-      const zEnd = project(0, 0, vector.z);
-      drawArrow2d(ctx, origin2d, xEnd, componentColor, 2);
-      drawArrow2d(ctx, origin2d, yEnd, componentColor, 2);
-      drawArrow2d(ctx, origin2d, zEnd, componentColor, 2);
-      if (vector.showComponentLabels) {
-        drawText2d(ctx, `x=${formatNumber(vector.x)}`, { x: xEnd.x + 8, y: xEnd.y }, vector.color);
-        drawText2d(ctx, `y=${formatNumber(vector.y)}`, { x: yEnd.x + 8, y: yEnd.y }, vector.color);
-        drawText2d(ctx, `z=${formatNumber(vector.z)}`, { x: zEnd.x + 8, y: zEnd.y }, vector.color);
-      }
-    }
-
-    drawArrow2d(ctx, origin2d, end, vector.color, Math.max(3, vector.thickness * 32));
-    if (vector.showNameLabel) {
-      drawText2d(ctx, vector.name, { x: end.x + 12, y: end.y - 10 }, vector.color);
-    }
-    if (vector.showMagnitudeLabel) {
-      drawText2d(ctx, `|v|=${formatNumber(new THREE.Vector3(vector.x, vector.y, vector.z).length())}`, {
-        x: (origin2d.x + end.x) / 2 + 12,
-        y: (origin2d.y + end.y) / 2 - 10,
-      }, vector.color);
-    }
-  }
-}
-
-function drawLine2d(
-  ctx: CanvasRenderingContext2D,
-  start: { x: number; y: number },
-  end: { x: number; y: number },
-) {
-  ctx.beginPath();
-  ctx.moveTo(start.x, start.y);
-  ctx.lineTo(end.x, end.y);
-  ctx.stroke();
-}
-
-function drawArrow2d(
-  ctx: CanvasRenderingContext2D,
-  start: { x: number; y: number },
-  end: { x: number; y: number },
-  color: string,
-  width: number,
-) {
-  const dx = end.x - start.x;
-  const dy = end.y - start.y;
-  const length = Math.hypot(dx, dy);
-  if (length < 0.5) return;
-
-  const angle = Math.atan2(dy, dx);
-  const headLength = Math.min(16, Math.max(8, length * 0.12));
-
-  ctx.save();
-  ctx.strokeStyle = color;
-  ctx.fillStyle = color;
-  ctx.lineWidth = width;
-  ctx.lineCap = "round";
-  drawLine2d(ctx, start, end);
-  ctx.beginPath();
-  ctx.moveTo(end.x, end.y);
-  ctx.lineTo(
-    end.x - headLength * Math.cos(angle - Math.PI / 7),
-    end.y - headLength * Math.sin(angle - Math.PI / 7),
-  );
-  ctx.lineTo(
-    end.x - headLength * Math.cos(angle + Math.PI / 7),
-    end.y - headLength * Math.sin(angle + Math.PI / 7),
-  );
-  ctx.closePath();
-  ctx.fill();
-  ctx.restore();
-}
-
-function drawText2d(
-  ctx: CanvasRenderingContext2D,
-  text: string,
-  position: { x: number; y: number },
-  color: string,
-) {
-  ctx.save();
-  ctx.font = "600 13px sans-serif";
-  ctx.textBaseline = "middle";
-  ctx.fillStyle = "rgba(255,255,255,0.88)";
-  const metrics = ctx.measureText(text);
-  ctx.fillRect(position.x - 5, position.y - 11, metrics.width + 10, 22);
-  ctx.fillStyle = color;
-  ctx.fillText(text, position.x, position.y);
-  ctx.restore();
+  if (!renderState.renderer || !renderState.labelRenderer) return;
+  renderState.controls?.update();
+  renderState.renderer.render(scene, camera);
+  renderState.labelRenderer.render(scene, camera);
 }
 
 function getSelectedVector() {
-  const vector = vectors.find((entry) => entry.id === selectedId);
+  const vector = vectors.find((entry) => entry.id === app.selectedId);
   if (!vector) {
     throw new Error("No selected vector");
   }
   return vector;
 }
 
-function getVectorDisplayName(vector: VectorModel) {
-  return vector.name.trim() || "未命名向量";
-}
-
-function readNumber(value: string) {
-  const parsed = Number.parseFloat(value);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function formatNumber(value: number) {
-  if (!Number.isFinite(value)) return "不可定义";
-  const fixed = Number.parseFloat(value.toFixed(3));
-  return Object.is(fixed, -0) ? "0" : String(fixed);
-}
-
-function formatInput(value: number) {
-  return Number.isInteger(value) ? String(value) : String(Number.parseFloat(value.toFixed(3)));
-}
-
-function getDirectionControls(vector: VectorModel) {
-  const magnitude = new THREE.Vector3(vector.x, vector.y, vector.z).length();
-  if (magnitude <= 0.0001) {
-    return { magnitude: 0, yaw: 0, pitch: 0 };
-  }
-  return {
-    magnitude,
-    yaw: THREE.MathUtils.radToDeg(Math.atan2(vector.y, vector.x)),
-    pitch: THREE.MathUtils.radToDeg(Math.asin(THREE.MathUtils.clamp(vector.z / magnitude, -1, 1))),
-  };
-}
-
-function keyToIndex(key: string) {
-  return key === "x" ? 0 : key === "y" ? 1 : 2;
-}
-
-function randomVectorColor(id: number) {
-  const palette = ["#c4514b", "#238b69", "#2f6fca", "#b36a16", "#6f4bd8", "#216f7a"];
-  return palette[id % palette.length];
-}
-
-function hexToRgba(hex: string, opacity: number) {
-  const color = new THREE.Color(hex);
-  return `rgba(${Math.round(color.r * 255)}, ${Math.round(color.g * 255)}, ${Math.round(
-    color.b * 255,
-  )}, ${opacity})`;
+function deleteVector(id: number) {
+  const vector = vectors.find((v) => v.id === id);
+  if (!vector) return;
+  if (!confirm(`确定删除「${getVectorDisplayName(vector)}」？`)) return;
+  const index = vectors.findIndex((v) => v.id === id);
+  if (index >= 0) vectors.splice(index, 1);
+  if (app.selectedId === id) app.selectedId = vectors[0].id;
+  syncAll();
 }
